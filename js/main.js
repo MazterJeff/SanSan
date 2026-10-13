@@ -6,28 +6,32 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-const IMG_W = 1159, IMG_H = 1283;
+const IMG_W = 890, IMG_H = 1187;
 const ZIMA = [26, 167, 232], INDIGO = [43, 47, 143];
 
-// Face landmarks, normalized to the photo (traced by hand).
+// Face landmarks for both faces, normalized to the photo (placed by hand).
+// h_ = him (left), s_ = SanSan (right).
 const LM = {
-  browL: [.315, .175], fore: [.50, .15], browR: [.733, .148],
-  eyeLo: [.217, .236], eyeL: [.315, .244], eyeLi: [.403, .246],
-  eyeRi: [.647, .235], eyeR: [.709, .214], eyeRo: [.828, .201],
-  bridge: [.604, .320], tip: [.578, .507], nosL: [.535, .511], nosR: [.611, .508],
-  mouthL: [.414, .602], lipU: [.543, .585], mouthR: [.657, .590], lipD: [.526, .641],
-  chin: [.526, .762],
-  jL1: [.168, .281], jL2: [.181, .475], jL3: [.267, .655], jL4: [.371, .729],
-  jR1: [.835, .304], jR2: [.811, .460], jR3: [.733, .631], jR4: [.656, .701],
+  h_brow1: [.191, .181], h_brow2: [.371, .195],
+  h_eyeO: [.185, .249], h_eye: [.262, .253], h_eyeI: [.343, .263],
+  h_noseB: [.135, .379], h_nose: [.067, .421], h_lip: [.045, .522], h_mouth: [.112, .539],
+  h_jaw1: [.376, .303], h_cheek: [.337, .396], h_jaw2: [.258, .497], h_jaw3: [.169, .590], h_chin: [.067, .628],
+  s_fore: [.719, .362], s_bL: [.472, .455], s_bR: [.944, .396],
+  s_eyeLo: [.478, .505], s_eyeL: [.545, .510], s_eyeLi: [.601, .514],
+  s_eyeRi: [.787, .466], s_eyeR: [.843, .451], s_eyeRo: [.904, .440],
+  s_bridge: [.719, .539], s_tip: [.787, .653], s_nosL: [.719, .682], s_nosR: [.831, .678],
+  s_mL: [.719, .746], s_lipU: [.826, .733], s_mR: [.933, .723], s_lipD: [.826, .783], s_chin: [.837, .861],
+  s_j1: [.483, .548], s_j2: [.539, .640], s_j3: [.629, .729], s_j4: [.725, .809], s_j5: [.966, .847],
 };
 const EDGES = (
-  "jL1-jL2 jL2-jL3 jL3-jL4 jL4-chin chin-jR4 jR4-jR3 jR3-jR2 jR2-jR1 " +
-  "browL-fore fore-browR browL-eyeLo browL-eyeLi browR-eyeRi browR-eyeRo " +
-  "eyeLo-eyeL eyeL-eyeLi eyeRi-eyeR eyeR-eyeRo jL1-eyeLo jR1-eyeRo jL1-browL jR1-browR " +
-  "eyeLi-bridge eyeRi-bridge fore-bridge bridge-tip tip-nosL tip-nosR nosL-eyeLi nosR-eyeRi " +
-  "nosL-lipU nosR-lipU mouthL-lipU lipU-mouthR mouthL-lipD lipD-mouthR lipD-chin " +
-  "mouthL-jL3 mouthR-jR3 mouthL-jL4 mouthR-jR4 lipD-jL4 lipD-jR4 nosL-jL2 nosR-jR2 " +
-  "eyeLo-jL2 eyeRo-jR2 nosL-mouthL nosR-mouthR"
+  "h_brow1-h_brow2 h_brow1-h_eyeO h_brow2-h_eyeI h_eyeO-h_eye h_eye-h_eyeI h_brow2-h_jaw1 h_eyeI-h_jaw1 " +
+  "h_jaw1-h_cheek h_cheek-h_jaw2 h_jaw2-h_jaw3 h_jaw3-h_chin h_eyeI-h_noseB h_eye-h_noseB h_eyeO-h_noseB " +
+  "h_noseB-h_nose h_nose-h_lip h_lip-h_mouth h_mouth-h_jaw3 h_mouth-h_jaw2 h_cheek-h_noseB h_cheek-h_mouth h_chin-h_mouth " +
+  "s_j1-s_j2 s_j2-s_j3 s_j3-s_j4 s_j4-s_chin s_chin-s_j5 s_bL-s_fore s_fore-s_bR s_bL-s_eyeLo s_bL-s_eyeLi " +
+  "s_fore-s_eyeLi s_fore-s_eyeRi s_bR-s_eyeRo s_bR-s_eyeRi s_eyeLo-s_eyeL s_eyeL-s_eyeLi s_eyeRi-s_eyeR s_eyeR-s_eyeRo " +
+  "s_eyeLo-s_j1 s_eyeLi-s_bridge s_eyeRi-s_bridge s_bridge-s_tip s_tip-s_nosL s_tip-s_nosR s_nosL-s_mL s_nosR-s_mR " +
+  "s_nosL-s_lipU s_nosR-s_lipU s_mL-s_lipU s_lipU-s_mR s_mL-s_lipD s_lipD-s_mR s_lipD-s_chin s_mL-s_j3 s_mL-s_j4 " +
+  "s_lipD-s_j4 s_mR-s_j5 s_lipD-s_j5 s_j1-s_bridge s_j2-s_bridge s_j2-s_nosL s_eyeRo-s_nosR"
 ).split(" ").map((e) => e.split("-"));
 
 /* ---------------- RECONSTRUCTION ---------------- */
@@ -62,7 +66,7 @@ function build() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   cell = W / GRID.cols;
-  const cx = W * .5, cy = H * .4, maxD = Math.hypot(W, H) * .6;
+  const cx = W * .55, cy = H * .48, maxD = Math.hypot(W, H) * .6;
   dots = [];
   for (let j = 0; j < GRID.rows; j++) for (let i = 0; i < GRID.cols; i++) {
     const d = 1 - LUM[j * GRID.cols + i] / 255;   // darkness 0..1

@@ -1,8 +1,11 @@
 """Turn img/sansan.jpg into the brightness grid the page draws as dots.
 
-    python3 tools/make_dots.py [cols] [gamma]
+    python3 tools/make_dots.py [cols] [gamma] [local] [highlight] [preview.png]
 
-Writes js/dots.js. Also writes a preview PNG if a path is given as the 3rd arg.
+cols: dots across. gamma: >1 darkens midtones. local: 0..1, how much local
+contrast to mix in. highlight: how strongly to bring out detail on bright
+skin (0 = off). Writes js/dots.js, plus
+a preview PNG if a path is given.
 """
 import base64, sys
 import numpy as np
@@ -12,19 +15,25 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 root = Path(__file__).resolve().parent.parent
 cols = int(sys.argv[1]) if len(sys.argv) > 1 else 112
 gamma = float(sys.argv[2]) if len(sys.argv) > 2 else 1.5
-preview = sys.argv[3] if len(sys.argv) > 3 else None
+local_w = float(sys.argv[3]) if len(sys.argv) > 3 else 0.2
+highlight = float(sys.argv[4]) if len(sys.argv) > 4 else 4.0
+preview = sys.argv[5] if len(sys.argv) > 5 else None
 
-im = Image.open(root / "img/sansan.jpg").convert("L")
+# green channel: keeps lips and skin shading visible on an overexposed face
+im = Image.open(root / "img/sansan.jpg").convert("RGB").getchannel("G")
 rows = round(cols * im.height / im.width)
-# The photo is washed out, so boost local contrast: each pixel is compared
-# with its neighbourhood, which brings out the eyes, nose and lips on the
-# bright face while keeping the dark hair dark.
+# Tone mapping. Bright skin (her face is overexposed) gets its fine detail
+# amplified and is pulled down a little so it carries dots; local contrast
+# (each pixel against its neighbourhood) is mixed in everywhere else.
 a = np.asarray(ImageOps.autocontrast(im, cutoff=0.5), dtype=np.float32) / 255
 blur = lambda x, r: np.asarray(Image.fromarray((x * 255).clip(0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(r)), dtype=np.float32) / 255
 mean = blur(a, 40)
 std = np.sqrt(blur((a - mean) ** 2, 40)) + 0.04
 local = (0.5 + (a - mean) / (3 * std)).clip(0, 1)
-a = (0.45 * a + 0.55 * local) ** gamma
+bright = ((blur(a, 24) - 0.6) / 0.3).clip(0, 1)
+detail = a - blur(a, 10)
+a = ((1 - local_w) * a + local_w * local).clip(0, 1) ** gamma
+a = (a + bright * (detail * highlight - 0.12 * highlight / 4)).clip(0, 1)
 small = Image.fromarray((a * 255).clip(0, 255).astype(np.uint8)).resize((cols, rows), Image.LANCZOS)
 lum = small.tobytes()
 

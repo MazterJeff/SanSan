@@ -18,10 +18,10 @@ body { margin: 0; background: var(--bg); }
 }
 .frame {
   position: relative; margin: 0;
-  width: min(560px, 86vw, calc(78vh * 1159 / 1283));
+  width: min(560px, 86vw, calc(78vh * 890 / 1187));
 }
 #recon {
-  display: block; width: 100%; aspect-ratio: 1159 / 1283;
+  display: block; width: 100%; aspect-ratio: 890 / 1187;
   background: #fff;
   box-shadow: 0 30px 80px -40px rgba(43, 47, 143, .35);
   cursor: crosshair;
