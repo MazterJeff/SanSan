@@ -123,14 +123,28 @@
   const scatter = Array.from({ length: COLS * ROWS }, () => [rand(-1, 1), rand(-1, 1)]);
   const motes = [];   // dispersing dots
 
-  window.addEventListener("pointermove", (e) => {
-    target.x = e.clientX; target.y = e.clientY; target.active = true;
-    if (!dog.shown) {
-      dog.shown = true; dog.born = performance.now();
-      dog.x = e.clientX - 90; dog.y = e.clientY + 40;
-    }
-  }, { passive: true });
-  window.addEventListener("pointerdown", (e) => { target.x = e.clientX; target.y = e.clientY; }, { passive: true });
+  function appear(x, y) {
+    if (dog.shown) return;
+    dog.shown = true; dog.born = performance.now();
+    dog.x = x; dog.y = y;
+    target.x = x; target.y = y - 34;
+  }
+  function follow(x, y) {
+    target.x = x; target.y = y; target.active = true;
+    appear(x - 90, y + 40);
+  }
+  // mouse, pen and touch (taps, drags) all steer it
+  window.addEventListener("pointermove", (e) => follow(e.clientX, e.clientY), { passive: true });
+  window.addEventListener("pointerdown", (e) => follow(e.clientX, e.clientY), { passive: true });
+  window.addEventListener("touchmove", (e) => { const t = e.touches[0]; if (t) follow(t.clientX, t.clientY); }, { passive: true });
+
+  // Without any input it still shows up: once the portrait has rebuilt, it
+  // assembles by the frame's lower-right corner and sits there.
+  setTimeout(() => {
+    const f = document.querySelector(".frame");
+    const r = f ? f.getBoundingClientRect() : { right: VW * .7, bottom: VH * .8 };
+    appear(Math.min(VW - 70, r.right - 40), Math.min(VH - 20, r.bottom - 12));
+  }, reduceMotion ? 0 : 5600);
 
   function lerpFrame(frames, phase, i) {
     const p = ((phase / (Math.PI * 2)) % 1 + 1) % 1 * N;
