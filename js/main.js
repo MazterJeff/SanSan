@@ -1,459 +1,316 @@
-/* ==========================================================
-   SANSAN.SYS
-   ========================================================== */
+/* SanSan — rebuilt from light */
 const CONFIG = {
-  // The day it all started — set this to make the TIME SYNCED clock count up.
-  // Format: "YYYY-MM-DDTHH:MM:SS". Leave null to show ∞.
+  // The day it all started, e.g. "2023-05-20". Leave null to show ∞.
   since: null,
 };
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const $ = (s, el = document) => el.querySelector(s);
-const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const $ = (s) => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-/* ---------------- BOOT ---------------- */
-const BOOT_LINES = [
-  "> SANSAN.SYS 起動中 …",
-  "> loading memory archive ........ 10,797 files",
-  "> calibrating heart ............. OK",
-  "> tracing contour ............... 瞳 · 前髪 · 唇",
-  "> encrypting with 愛 ............ OK",
-  "> 接続完了 — CONNECTION ESTABLISHED",
-];
+const IMG_W = 1159, IMG_H = 1283;
+const ZIMA = [26, 167, 232], INDIGO = [43, 47, 143];
 
-function boot() {
-  const box = $("#boot");
-  const log = $("#boot-log");
-  const bar = $(".boot-bar i");
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    box.classList.add("done");
-    document.body.classList.remove("booting");
-    startHero();
-  };
-  if (reduceMotion) return finish();
-  box.addEventListener("click", finish);
-  let i = 0;
-  const next = () => {
-    if (done) return;
-    if (i >= BOOT_LINES.length) return setTimeout(finish, 450);
-    log.textContent += (i ? "\n" : "") + BOOT_LINES[i];
-    i++;
-    bar.style.width = (i / BOOT_LINES.length) * 100 + "%";
-    setTimeout(next, i === BOOT_LINES.length ? 380 : rand(220, 360));
-  };
-  setTimeout(next, 300);
+// Face landmarks, normalized to the photo (traced by hand).
+const LM = {
+  browL: [.315, .175], fore: [.50, .15], browR: [.733, .148],
+  eyeLo: [.217, .236], eyeL: [.315, .244], eyeLi: [.403, .246],
+  eyeRi: [.647, .235], eyeR: [.709, .214], eyeRo: [.828, .201],
+  bridge: [.604, .320], tip: [.578, .507], nosL: [.535, .511], nosR: [.611, .508],
+  mouthL: [.414, .602], lipU: [.543, .585], mouthR: [.657, .590], lipD: [.526, .641],
+  chin: [.526, .762],
+  jL1: [.168, .281], jL2: [.181, .475], jL3: [.267, .655], jL4: [.371, .729],
+  jR1: [.835, .304], jR2: [.811, .460], jR3: [.733, .631], jR4: [.656, .701],
+};
+const EDGES = (
+  "jL1-jL2 jL2-jL3 jL3-jL4 jL4-chin chin-jR4 jR4-jR3 jR3-jR2 jR2-jR1 " +
+  "browL-fore fore-browR browL-eyeLo browL-eyeLi browR-eyeRi browR-eyeRo " +
+  "eyeLo-eyeL eyeL-eyeLi eyeRi-eyeR eyeR-eyeRo jL1-eyeLo jR1-eyeRo jL1-browL jR1-browR " +
+  "eyeLi-bridge eyeRi-bridge fore-bridge bridge-tip tip-nosL tip-nosR nosL-eyeLi nosR-eyeRi " +
+  "nosL-lipU nosR-lipU mouthL-lipU lipU-mouthR mouthL-lipD lipD-mouthR lipD-chin " +
+  "mouthL-jL3 mouthR-jR3 mouthL-jL4 mouthR-jR4 lipD-jL4 lipD-jR4 nosL-jL2 nosR-jR2 " +
+  "eyeLo-jL2 eyeRo-jR2 nosL-mouthL nosR-mouthR"
+).split(" ").map((e) => e.split("-"));
+const TAGS = { eyeL: "01 瞳", eyeR: "02 瞳", tip: "03 鼻", lipU: "04 唇" };
+
+/* ---------------- RECONSTRUCTION ---------------- */
+const canvas = $("#recon");
+const ctx = canvas.getContext("2d");
+const img = $("#photo");
+const pctEl = $("#pct"), barEl = $("#bar"), statusEl = $("#statusText"), countEl = $("#count");
+
+let W = 0, H = 0, DPR = 1, cell = 6;
+let photo, mosaic;            // offscreen canvases
+let dots = [];                // { x, y, sx, sy, r, b, delay }
+let buckets = 6;
+let hasPixels = true;
+let t0 = 0, done = false;
+const pointer = { x: 0, y: 0, in: false };
+let glitchUntil = 0, nextGlitch = 0, glitchSlices = [];
+
+const T = { dots: 2000, meshIn: 1300, scanStart: 2200, scanDur: 2200, meshOut: 4700 };
+
+function offscreen(w, h) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  return c;
 }
 
-/* ---------------- PORTRAIT ---------------- */
-const svg = $("#portrait");
-const DRAW_ORDER = { face: 0, lid: 0.7, lower: 0.9, crease: 1.1, hair: 1.3, strand: 1.9, brow: 2.4, soft: 2.5, lip: 2.6, "blush-ln": 3.3 };
+function build() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = canvas.clientWidth;
+  H = W * IMG_H / IMG_W;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-function prepPortrait() {
-  $$(".ln", svg).forEach((p) => {
-    const len = Math.ceil(p.getTotalLength()) + 2;
-    p.style.strokeDasharray = len;
-    p.style.strokeDashoffset = reduceMotion ? 0 : len;
-    const key = Object.keys(DRAW_ORDER).find((k) => p.classList.contains(k)) ?? "soft";
-    const delay = DRAW_ORDER[key] + rand(0, 0.5);
-    const dur = Math.min(2.2, 0.6 + len / 900);
-    p.style.transition = `stroke-dashoffset ${dur}s cubic-bezier(.65,0,.35,1) ${delay}s`;
-  });
-}
+  // the photo, with a faint cool grade
+  photo = offscreen(canvas.width, canvas.height);
+  const p = photo.getContext("2d");
+  p.drawImage(img, 0, 0, photo.width, photo.height);
+  p.globalCompositeOperation = "soft-light";
+  p.fillStyle = "rgba(26,167,232,.18)";
+  p.fillRect(0, 0, photo.width, photo.height);
 
-function startHero() {
-  requestAnimationFrame(() => {
-    $$(".ln", svg).forEach((p) => (p.style.strokeDashoffset = 0));
-    svg.classList.add("drawn");
-  });
-  $$(".hero .reveal").forEach((el) => el.classList.add("in"));
-  const lockText = $("#lockText");
-  const lock = $(".lock");
-  setTimeout(() => (lockText.textContent = "CONTOUR TRACE 100% · 輪郭完了"), reduceMotion ? 0 : 2600);
-  setTimeout(() => {
-    svg.classList.add("locked");
-    lock.classList.add("on");
-    lockText.textContent = "TARGET LOCKED — 世界で一番かわいい";
-    $("#syncBar").style.width = "100%";
-    countTo($("#syncPct"), 100, 3500, "%");
-  }, reduceMotion ? 0 : 4200);
-  if (!reduceMotion) scheduleBlink();
-}
+  // blocky version for the scan band
+  cell = Math.max(5, Math.round(W / 92));
+  const cols = Math.floor(W / cell), rows = Math.floor(H / cell);
+  mosaic = offscreen(cols, rows);
+  mosaic.getContext("2d").drawImage(photo, 0, 0, cols, rows);
 
-function scheduleBlink() {
-  setTimeout(() => {
-    svg.classList.add("blink");
-    setTimeout(() => svg.classList.remove("blink"), 140);
-    // occasional double blink
-    if (Math.random() < 0.25) setTimeout(() => {
-      svg.classList.add("blink");
-      setTimeout(() => svg.classList.remove("blink"), 120);
-    }, 300);
-    scheduleBlink();
-  }, rand(2600, 5600));
-}
-
-function countTo(el, target, ms, suffix = "") {
-  const t0 = performance.now();
-  const step = (t) => {
-    const k = Math.min(1, (t - t0) / ms);
-    el.textContent = Math.round(target * (1 - Math.pow(1 - k, 3))) + suffix;
-    if (k < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-
-/* parallax + gaze: she looks toward you */
-const layers = $$(".layer", svg);
-const gazes = $$(".gaze", svg);
-let pointer = { x: 0, y: 0, inside: false };
-
-function onPointer(e) {
-  const r = svg.getBoundingClientRect();
-  const cx = r.left + r.width / 2, cy = r.top + r.height * 0.42;
-  pointer.x = Math.max(-1, Math.min(1, (e.clientX - cx) / (window.innerWidth / 2)));
-  pointer.y = Math.max(-1, Math.min(1, (e.clientY - cy) / (window.innerHeight / 2)));
-  pointer.inside = e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom;
-  if (reduceMotion) return;
-  layers.forEach((l) => {
-    const d = parseFloat(l.dataset.depth);
-    l.style.transform = `translate(${pointer.x * d * 18}px, ${pointer.y * d * 12}px)`;
-  });
-  gazes.forEach((g) => (g.style.transform = `translate(${pointer.x * 9}px, ${pointer.y * 6}px)`));
-}
-window.addEventListener("pointermove", onPointer, { passive: true });
-
-/* ---------------- ECG ---------------- */
-function ecg() {
-  const c = $("#ecg");
-  const ctx = c.getContext("2d");
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const W = 300, H = 70;
-  c.width = W * dpr; c.height = H * dpr;
-  ctx.scale(dpr, dpr);
-  const bpmEl = $("#bpm"), note = $("#bpmNote");
-  const pts = new Array(W).fill(H / 2);
-  let phase = 0, bpm = 72, last = performance.now();
-
-  // one heartbeat waveform, x in [0,1)
-  const wave = (x) => {
-    if (x < 0.10) return Math.sin(x / 0.10 * Math.PI) * 4;            // P
-    if (x < 0.16) return 0;
-    if (x < 0.18) return -6;                                          // Q
-    if (x < 0.22) return 28;                                          // R
-    if (x < 0.25) return -10;                                         // S
-    if (x < 0.40) return 0;
-    if (x < 0.55) return Math.sin((x - 0.40) / 0.15 * Math.PI) * 7;   // T
-    return 0;
-  };
-  // the R-peak, drawn as a little heart blip when she's near
-  const frame = (t) => {
-    const dt = (t - last) / 1000; last = t;
-    const target = pointer.inside ? 128 : 72 + Math.sin(t / 2400) * 3;
-    bpm += (target - bpm) * Math.min(1, dt * 1.5);
-    bpmEl.textContent = Math.round(bpm);
-    note.textContent = pointer.inside ? "心拍上昇 ♥" : "";
-    const speed = 2;
-    for (let s = 0; s < speed; s++) {
-      phase = (phase + bpm / 60 / 60 / speed) % 1;
-      pts.shift();
-      pts.push(H / 2 - wave(phase) + rand(-.6, .6));
+  // sample brightness → halftone particles
+  dots = [];
+  try {
+    const data = mosaic.getContext("2d").getImageData(0, 0, cols, rows).data;
+    let lo = 1, hi = 0;
+    const lum = new Float32Array(cols * rows);
+    for (let i = 0; i < lum.length; i++) {
+      const l = (0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]) / 255;
+      lum[i] = l; lo = Math.min(lo, l); hi = Math.max(hi, l);
     }
-    ctx.clearRect(0, 0, W, H);
-    ctx.strokeStyle = "rgba(0,229,255,.12)";
-    ctx.lineWidth = 1;
-    for (let x = 0; x < W; x += 20) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-    const g = ctx.createLinearGradient(0, 0, W, 0);
-    g.addColorStop(0, "rgba(0,229,255,0)");
-    g.addColorStop(.7, "rgba(0,229,255,.9)");
-    g.addColorStop(1, pointer.inside ? "#ff7ab8" : "#ffffff");
-    ctx.strokeStyle = g;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = "#00e5ff"; ctx.shadowBlur = 8;
+    const cx = W * .5, cy = H * .4, maxD = Math.hypot(W, H) * .6;
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+      const d = 1 - (lum[j * cols + i] - lo) / (hi - lo || 1);   // darkness 0..1
+      const x = (i + .5) * cell, y = (j + .5) * cell;
+      const a = rand(0, Math.PI * 2), far = rand(.5, 1.1) * maxD * 1.4;
+      dots.push({
+        x, y,
+        sx: cx + Math.cos(a) * far, sy: cy + Math.sin(a) * far,
+        r: cell * .5 * (0.14 + 0.86 * Math.pow(d, .85)),
+        b: Math.min(buckets - 1, Math.floor(d * buckets)),
+        delay: (Math.hypot(x - cx, y - cy) / maxD) * 700 + rand(0, 300),
+      });
+    }
+    hasPixels = true;
+  } catch {
+    // file:// pages can't read pixels; skip straight to the scan
+    hasPixels = false;
+  }
+  countEl.textContent = hasPixels ? `${dots.length.toLocaleString()} PARTICLES` : "— PARTICLES";
+}
+
+const bucketColor = (b) => {
+  const k = b / (buckets - 1);
+  const c = ZIMA.map((z, i) => Math.round(z + (INDIGO[i] - z) * k));
+  return `rgb(${c})`;
+};
+
+function drawDots(progressAt, clipFn) {
+  for (let b = 0; b < buckets; b++) {
+    ctx.fillStyle = bucketColor(b);
     ctx.beginPath();
-    pts.forEach((y, x) => (x ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    requestAnimationFrame(frame);
-  };
+    for (const d of dots) {
+      if (d.b !== b) continue;
+      const k = Math.min(1, progressAt(d));
+      if (k <= 0) continue;
+      const e = easeOut(k);
+      const x = d.sx + (d.x - d.sx) * e, y = d.sy + (d.y - d.sy) * e;
+      if (clipFn && !clipFn(x, y)) continue;
+      const r = d.r * (0.4 + 0.6 * e);
+      ctx.moveTo(x + r, y);
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+}
+
+function drawMesh(alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = "rgba(26,167,232,.75)";
+  ctx.lineWidth = .7;
+  ctx.beginPath();
+  for (const [a, b] of EDGES) {
+    ctx.moveTo(LM[a][0] * W, LM[a][1] * H);
+    ctx.lineTo(LM[b][0] * W, LM[b][1] * H);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#2b2f8f";
+  for (const k in LM) ctx.fillRect(LM[k][0] * W - 1.5, LM[k][1] * H - 1.5, 3, 3);
+  ctx.font = `${Math.max(9, W / 56)}px "IBM Plex Mono", monospace`;
+  ctx.fillStyle = "#2b2f8f";
+  for (const k in TAGS) ctx.fillText(TAGS[k], LM[k][0] * W + 6, LM[k][1] * H - 6);
+  ctx.restore();
+}
+
+function drawPhotoRows(y0, y1) {
+  y0 = Math.max(0, y0); y1 = Math.min(H, y1);
+  if (y1 <= y0) return;
+  ctx.drawImage(photo, 0, y0 * DPR, photo.width, (y1 - y0) * DPR, 0, y0, W, y1 - y0);
+}
+
+function drawMosaicRows(y0, y1) {
+  y0 = Math.max(0, y0); y1 = Math.min(H, y1);
+  if (y1 <= y0) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.beginPath(); ctx.rect(0, y0, W, y1 - y0); ctx.clip();
+  ctx.drawImage(mosaic, 0, 0, mosaic.width * cell, mosaic.height * cell);
+  ctx.restore();
+}
+
+function glitch(y0, y1, n, amp) {
+  for (let i = 0; i < n; i++) {
+    const y = rand(y0, y1), h = rand(2, 10), dx = rand(-amp, amp);
+    ctx.drawImage(photo, 0, y * DPR, photo.width, h * DPR, dx, y, W, h);
+    ctx.fillStyle = "rgba(26,167,232,.18)";
+    ctx.fillRect(0, y, W, h);
+  }
+}
+
+function setProgress(p) {
+  const v = Math.round(p * 100);
+  pctEl.textContent = String(v).padStart(3, "0");
+  barEl.style.width = v + "%";
+}
+
+function frame(now) {
+  const t = now - t0;
+  ctx.clearRect(0, 0, W, H);
+
+  if (!done) {
+    const dotsK = hasPixels ? clamp01(t / T.dots) : 1;
+    const scanK = clamp01((t - (hasPixels ? T.scanStart : 300)) / T.scanDur);
+    const scanY = easeInOut(scanK) * (H + 40);
+
+    // revealed photo above the scan line, a blocky band at the line
+    drawPhotoRows(0, scanY - 40);
+    if (scanK > 0 && scanK < 1) {
+      drawMosaicRows(scanY - 40, scanY);
+      glitch(scanY - 50, scanY, 3, 14);
+    }
+    // particles still waiting below the line
+    if (hasPixels) drawDots((d) => (t - d.delay) / 1100, (x, y) => y > scanY - 4);
+
+    // scan line
+    if (scanK > 0 && scanK < 1) {
+      const g = ctx.createLinearGradient(0, scanY - 60, 0, scanY);
+      g.addColorStop(0, "rgba(26,167,232,0)");
+      g.addColorStop(1, "rgba(26,167,232,.22)");
+      ctx.fillStyle = g; ctx.fillRect(0, scanY - 60, W, 60);
+      ctx.fillStyle = "#1aa7e8"; ctx.fillRect(0, scanY, W, 1);
+    }
+
+    const meshA = hasPixels
+      ? Math.min(clamp01((t - T.meshIn) / 500), 1 - clamp01((t - T.meshOut) / 900))
+      : 1 - clamp01((t - 2600) / 900);
+    drawMesh(meshA);
+
+    const p = hasPixels ? dotsK * .35 + scanK * .65 : scanK;
+    setProgress(p);
+    statusEl.textContent = scanK > 0 ? "RECONSTRUCTING — 再構成中" : "COLLECTING LIGHT — 光を集めています";
+    if (scanK >= 1 && meshA <= 0) finish(now);
+  } else {
+    ctx.drawImage(photo, 0, 0, W, H);
+    // a rare, quiet glitch
+    if (now > nextGlitch) {
+      glitchUntil = now + 140;
+      nextGlitch = now + rand(4000, 8000);
+      const y = rand(H * .1, H * .9);
+      glitchSlices = Array.from({ length: 3 }, () => [y + rand(-30, 30), rand(2, 8), rand(-10, 10)]);
+    }
+    if (now < glitchUntil) {
+      for (const [y, h, dx] of glitchSlices) {
+        ctx.drawImage(photo, 0, y * DPR, photo.width, h * DPR, dx, y, W, h);
+        ctx.fillStyle = "rgba(26,167,232,.2)"; ctx.fillRect(0, y, W, h);
+      }
+    }
+    if (pointer.in) lens();
+  }
   requestAnimationFrame(frame);
 }
 
-/* ---------------- SKY: stars, petals, grid, hearts ---------------- */
-const sky = $("#sky");
-const sctx = sky.getContext("2d");
-let SW, SH, SDPR;
-const stars = [], petals = [], hearts = [], streams = [];
-const KATA = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン愛恋光夢";
-
-function resizeSky() {
-  SDPR = Math.min(2, window.devicePixelRatio || 1);
-  SW = window.innerWidth; SH = window.innerHeight;
-  sky.width = SW * SDPR; sky.height = SH * SDPR;
-  sctx.setTransform(SDPR, 0, 0, SDPR, 0, 0);
-  stars.length = 0;
-  const n = Math.round((SW * SH) / 6000);
-  for (let i = 0; i < n; i++) stars.push({ x: rand(0, SW), y: rand(0, SH), r: rand(.3, 1.4), p: rand(0, 6.28), s: rand(.5, 2) });
-  if (!petals.length && !reduceMotion) for (let i = 0; i < Math.round(SW / 38); i++) petals.push(newPetal());
-  streams.length = 0;
-  const cols = SW < 700 ? 2 : Math.max(4, Math.round(SW / 160));
-  for (let i = 0; i < cols; i++) {
-    // keep code rain to the edges so the center stays clean
-    const edge = i % 2 ? rand(0, SW * 0.18) : rand(SW * 0.82, SW);
-    streams.push({ x: edge, y: rand(-SH, SH), v: rand(30, 70), len: Math.round(rand(6, 16)), chars: [] });
-  }
-}
-
-function newPetal(top = false) {
-  return {
-    x: rand(-50, SW + 50), y: top ? rand(-60, -10) : rand(0, SH),
-    s: rand(5, 11), vx: rand(-14, 6), vy: rand(14, 34),
-    rot: rand(0, 6.28), vr: rand(-1.2, 1.2), sway: rand(0, 6.28),
-    pink: Math.random() < 0.18, a: rand(.35, .85),
-  };
-}
-
-function drawPetal(p) {
-  sctx.save();
-  sctx.translate(p.x, p.y);
-  sctx.rotate(p.rot);
-  sctx.scale(1, Math.abs(Math.cos(p.sway)) * .7 + .3);
-  const s = p.s;
-  sctx.beginPath();
-  sctx.moveTo(0, -s);
-  sctx.bezierCurveTo(s * .9, -s * .7, s * .7, s * .6, 0, s);
-  sctx.bezierCurveTo(-s * .7, s * .6, -s * .9, -s * .7, -s * .18, -s * .82);
-  sctx.lineTo(0, -s * .6);
-  sctx.closePath();
-  const c = p.pink ? "255,150,200" : "150,215,255";
-  sctx.fillStyle = `rgba(${c},${p.a * .55})`;
-  sctx.strokeStyle = `rgba(${c},${p.a})`;
-  sctx.lineWidth = .8;
-  sctx.shadowColor = p.pink ? "#ff7ab8" : "#00e5ff";
-  sctx.shadowBlur = 8;
-  sctx.fill(); sctx.stroke();
-  sctx.restore();
-}
-
-function heartPath(ctx, s) {
+function lens() {
+  const R = W * .14, { x, y } = pointer;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = "#fff"; ctx.fillRect(x - R, y - R, R * 2, R * 2);
+  if (hasPixels) drawDots(() => 1, (dx, dy) => Math.abs(dx - x) < R + cell && Math.abs(dy - y) < R + cell);
+  else drawMosaicRows(y - R, y + R);
+  ctx.restore();
+  ctx.strokeStyle = "#1aa7e8"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(0, s * .35);
-  ctx.bezierCurveTo(-s * 1.1, -s * .35, -s * .45, -s * 1.15, 0, -s * .45);
-  ctx.bezierCurveTo(s * .45, -s * 1.15, s * 1.1, -s * .35, 0, s * .35);
-  ctx.closePath();
+  ctx.moveTo(x - R - 8, y); ctx.lineTo(x - R + 6, y);
+  ctx.moveTo(x + R - 6, y); ctx.lineTo(x + R + 8, y);
+  ctx.moveTo(x, y - R - 8); ctx.lineTo(x, y - R + 6);
+  ctx.moveTo(x, y + R - 6); ctx.lineTo(x, y + R + 8);
+  ctx.stroke();
+  ctx.font = `10px "IBM Plex Mono", monospace`;
+  ctx.fillStyle = "#2b2f8f";
+  ctx.fillText(`x ${(x / W).toFixed(3)}  y ${(y / H).toFixed(3)}`, x + R * .72 + 6, y + R * .72 + 12);
 }
 
-function burst(x, y, n = 14, power = 1) {
-  if (reduceMotion) return;
-  for (let i = 0; i < n; i++) {
-    const a = rand(0, Math.PI * 2), v = rand(60, 220) * power;
-    hearts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60 * power, s: rand(5, 13) * Math.sqrt(power), life: 0, max: rand(1.1, 2.2), pink: Math.random() < .55, rot: rand(-.5, .5) });
-  }
+function finish(now) {
+  done = true;
+  setProgress(1);
+  statusEl.textContent = "RECONSTRUCTION COMPLETE — 再構成完了";
+  $(".hint").classList.add("show");
+  nextGlitch = now + 2500;
 }
 
-let lastT = performance.now();
-function skyFrame(t) {
-  const dt = Math.min(.05, (t - lastT) / 1000); lastT = t;
-  sctx.clearRect(0, 0, SW, SH);
-
-  // stars
-  for (const s of stars) {
-    const a = .25 + .75 * (0.5 + 0.5 * Math.sin(t / 1000 * s.s + s.p));
-    sctx.fillStyle = `rgba(205,238,255,${a * .8})`;
-    sctx.fillRect(s.x, s.y, s.r, s.r);
-  }
-
-  // katakana code rain at the edges
-  sctx.font = "14px 'Share Tech Mono', monospace";
-  for (const st of streams) {
-    st.y += st.v * dt;
-    if (st.y - st.len * 18 > SH) { st.y = rand(-200, 0); }
-    for (let k = 0; k < st.len; k++) {
-      if (!st.chars[k] || Math.random() < .02) st.chars[k] = KATA[(Math.random() * KATA.length) | 0];
-      const a = (1 - k / st.len) * .22;
-      sctx.fillStyle = k === 0 ? `rgba(220,250,255,.45)` : `rgba(0,229,255,${a})`;
-      sctx.fillText(st.chars[k], st.x, st.y - k * 18);
-    }
-  }
-
-  // perspective grid floor, fades as you scroll away
-  const fade = Math.max(.15, 1 - window.scrollY / (SH * 1.2));
-  const horizon = SH * .72;
-  const gTop = horizon, gH = SH - horizon;
-  sctx.save();
-  sctx.globalAlpha = .55 * fade;
-  const grad = sctx.createLinearGradient(0, gTop, 0, SH);
-  grad.addColorStop(0, "rgba(0,229,255,0)");
-  grad.addColorStop(1, "rgba(0,229,255,.55)");
-  sctx.strokeStyle = grad;
-  sctx.lineWidth = 1;
-  const vx = SW / 2;
-  for (let i = -24; i <= 24; i++) {
-    sctx.beginPath();
-    sctx.moveTo(vx + i * 12, gTop);
-    sctx.lineTo(vx + i * SW / 10, SH);
-    sctx.stroke();
-  }
-  const off = reduceMotion ? 0 : (t / 1000 * .35) % 1;
-  for (let i = 0; i < 14; i++) {
-    const z = (i + off) / 14;
-    const y = gTop + gH * z * z;
-    sctx.beginPath(); sctx.moveTo(0, y); sctx.lineTo(SW, y); sctx.stroke();
-  }
-  sctx.restore();
-
-  // petals
-  for (const p of petals) {
-    p.sway += dt * 1.6;
-    p.x += (p.vx + Math.sin(p.sway) * 18) * dt;
-    p.y += p.vy * dt;
-    p.rot += p.vr * dt;
-    if (p.y > SH + 30 || p.x < -80 || p.x > SW + 80) Object.assign(p, newPetal(true));
-    drawPetal(p);
-  }
-
-  // hearts
-  for (let i = hearts.length - 1; i >= 0; i--) {
-    const h = hearts[i];
-    h.life += dt;
-    if (h.life > h.max) { hearts.splice(i, 1); continue; }
-    h.vy += 140 * dt; h.vx *= .985; h.vy *= .985;
-    h.x += h.vx * dt; h.y += h.vy * dt;
-    const a = 1 - h.life / h.max;
-    sctx.save();
-    sctx.translate(h.x, h.y); sctx.rotate(h.rot);
-    heartPath(sctx, h.s);
-    sctx.fillStyle = h.pink ? `rgba(255,122,184,${a * .8})` : `rgba(0,229,255,${a * .7})`;
-    sctx.shadowColor = h.pink ? "#ff7ab8" : "#00e5ff"; sctx.shadowBlur = 14;
-    sctx.fill();
-    sctx.restore();
-  }
-
-  requestAnimationFrame(skyFrame);
+function start() {
+  build();
+  if (reduceMotion) { finish(performance.now()); }
+  t0 = performance.now();
+  requestAnimationFrame(frame);
 }
 
-/* clicks in the hero spill a few hearts */
-$(".hero").addEventListener("click", (e) => {
-  if (e.target.closest("a, button")) return;
-  burst(e.clientX, e.clientY, 10, .7);
+canvas.addEventListener("pointermove", (e) => {
+  const r = canvas.getBoundingClientRect();
+  pointer.x = e.clientX - r.left; pointer.y = e.clientY - r.top; pointer.in = true;
+});
+canvas.addEventListener("pointerleave", () => (pointer.in = false));
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (canvas.clientWidth !== W) build(); }, 150);
 });
 
-/* ---------------- SCROLL REVEAL + TYPEWRITER ---------------- */
-function typewriter(el, speed) {
-  return new Promise((res) => {
-    const text = el.dataset.type;
-    if (reduceMotion) { el.textContent = text; return res(); }
-    el.classList.add("typing");
-    let i = 0;
-    const tick = () => {
-      i += 1;
-      el.textContent = text.slice(0, i);
-      if (i < text.length) {
-        const ch = text[i - 1];
-        setTimeout(tick, /[.,。、—]/.test(ch) ? speed * 9 : speed + rand(-8, 8));
-      } else { el.classList.remove("typing"); res(); }
-    };
-    tick();
-  });
-}
+if (img.complete && img.naturalWidth) start();
+else img.addEventListener("load", start, { once: true });
 
+/* ---------------- REVEAL ---------------- */
 const io = new IntersectionObserver((entries) => {
-  for (const en of entries) {
-    if (!en.isIntersecting) continue;
-    en.target.classList.add("in");
-    io.unobserve(en.target);
-    if (en.target.classList.contains("letter")) {
-      const [enP, jpP] = $$(".type", en.target);
-      typewriter(enP, 22).then(() => typewriter(jpP, 55));
-    }
-  }
-}, { threshold: .25 });
-$$("main .reveal").forEach((el) => io.observe(el));
+  for (const en of entries) if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+}, { threshold: .2 });
+document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
 
-/* ---------------- CLOCK ---------------- */
-function clock() {
-  if (!CONFIG.since) return;
+/* ---------------- DAYS ---------------- */
+if (CONFIG.since) {
   const start = new Date(CONFIG.since).getTime();
-  if (Number.isNaN(start)) return;
-  const cells = Object.fromEntries($$("#clock b").map((b) => [b.dataset.k, b]));
-  const pad = (n) => String(n).padStart(2, "0");
-  const tick = () => {
-    let s = Math.max(0, Math.floor((Date.now() - start) / 1000));
-    const d = Math.floor(s / 86400); s %= 86400;
-    cells.d.textContent = d;
-    cells.h.textContent = pad(Math.floor(s / 3600));
-    cells.m.textContent = pad(Math.floor((s % 3600) / 60));
-    cells.s.textContent = pad(s % 60);
-  };
-  tick();
-  setInterval(tick, 1000);
+  if (!Number.isNaN(start)) $("#days").textContent = Math.max(0, Math.floor((Date.now() - start) / 86400000)).toLocaleString();
 }
 
-/* ---------------- HEART SYNC (hold) ---------------- */
-function heartSync() {
-  const core = $("#core"), prog = $("#coreProg"), hint = $("#coreHint"), confess = $("#confess");
-  const C = 2 * Math.PI * 88;
-  let charge = 0, holding = false, synced = false, last = 0, raf = 0;
-
-  const loop = (t) => {
-    const dt = last ? (t - last) / 1000 : 0; last = t;
-    charge = holding ? Math.min(1, charge + dt / 1.8) : Math.max(0, charge - dt * 1.2);
-    prog.style.strokeDashoffset = C * (1 - charge);
-    if (holding && Math.random() < charge * .5) {
-      const r = core.getBoundingClientRect();
-      burst(r.left + r.width / 2 + rand(-60, 60), r.top + r.height / 2 + rand(-60, 60), 1, .4);
-    }
-    if (charge >= 1 && !synced) return complete();
-    if (holding || charge > 0) raf = requestAnimationFrame(loop);
-    else last = 0;
-  };
-  const complete = () => {
-    synced = true; holding = false;
-    core.classList.remove("charging");
-    core.classList.add("synced");
-    const r = core.getBoundingClientRect();
-    const x = r.left + r.width / 2, y = r.top + r.height / 2;
-    burst(x, y, 70, 2.2);
-    setTimeout(() => burst(x, y, 40, 1.4), 220);
-    hint.innerHTML = "同期完了<br /><span>HEARTS SYNCED · 100%</span>";
-    confess.classList.add("show");
-    for (let i = 0; i < 30; i++) petals.push(Object.assign(newPetal(true), { pink: true }));
-  };
-  const down = (e) => {
-    e.preventDefault();
-    if (synced) {
-      const r = core.getBoundingClientRect();
-      return burst(r.left + r.width / 2, r.top + r.height / 2, 30, 1.6);
-    }
-    holding = true;
-    core.classList.add("charging");
-    cancelAnimationFrame(raf); last = 0;
-    raf = requestAnimationFrame(loop);
-  };
-  const up = () => {
-    if (!holding) return;
-    holding = false;
-    core.classList.remove("charging");
-  };
-  core.addEventListener("pointerdown", down);
-  window.addEventListener("pointerup", up);
-  core.addEventListener("pointerleave", up);
-  core.addEventListener("pointercancel", up);
-  core.addEventListener("contextmenu", (e) => e.preventDefault());
-  // keyboard: hold space / enter
-  core.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) down(e); });
-  core.addEventListener("keyup", (e) => { if (e.key === " " || e.key === "Enter") up(); });
-}
-
-/* ---------------- INIT ---------------- */
-prepPortrait();
-resizeSky();
-window.addEventListener("resize", resizeSky);
-requestAnimationFrame(skyFrame);
-ecg();
-clock();
-heartSync();
-boot();
+/* ---------------- ZIMA ---------------- */
+const zima = $("#zima");
+zima.addEventListener("click", () => {
+  zima.classList.add("on");
+  zima.classList.remove("ripple");
+  void zima.offsetWidth;
+  zima.classList.add("ripple");
+});
