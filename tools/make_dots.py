@@ -1,10 +1,11 @@
 """Turn img/sansan.jpg into the brightness grid the page draws as dots.
 
-    python3 tools/make_dots.py [cols] [gamma] [local] [highlight] [preview.png]
+    python3 tools/make_dots.py [cols] [gamma] [local] [highlight] [depth] [preview.png]
 
 cols: dots across. gamma: >1 darkens midtones. local: 0..1, how much local
 contrast to mix in. highlight: how strongly to bring out detail on bright
-skin (0 = off). Writes js/dots.js, plus
+skin (0 = off). depth: 0..1, how dark the darkest dots get (lower = softer,
+lighter shadows). Writes js/dots.js, plus
 a preview PNG if a path is given.
 """
 import base64, sys
@@ -17,7 +18,8 @@ cols = int(sys.argv[1]) if len(sys.argv) > 1 else 112
 gamma = float(sys.argv[2]) if len(sys.argv) > 2 else 1.5
 local_w = float(sys.argv[3]) if len(sys.argv) > 3 else 0.2
 highlight = float(sys.argv[4]) if len(sys.argv) > 4 else 4.0
-preview = sys.argv[5] if len(sys.argv) > 5 else None
+depth = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
+preview = sys.argv[6] if len(sys.argv) > 6 else None
 
 # green channel: keeps lips and skin shading visible on an overexposed face
 im = Image.open(root / "img/sansan.jpg").convert("RGB").getchannel("G")
@@ -34,6 +36,7 @@ bright = ((blur(a, 24) - 0.6) / 0.3).clip(0, 1)
 detail = a - blur(a, 10)
 a = ((1 - local_w) * a + local_w * local).clip(0, 1) ** gamma
 a = (a + bright * (detail * highlight - 0.12 * highlight / 4)).clip(0, 1)
+a = 1 - (1 - a) * depth   # cap the darkness: lifts shadows, flattens contrast
 small = Image.fromarray((a * 255).clip(0, 255).astype(np.uint8)).resize((cols, rows), Image.LANCZOS)
 lum = small.tobytes()
 

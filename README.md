@@ -16,7 +16,7 @@ Opening `index.html` straight from disk works too. For GitHub Pages: Settings â†
 The page never loads the photo. It draws from `js/dots.js`, a brightness grid generated from `img/sansan.jpg`. To regenerate it (for example with more or fewer dots), run:
 
 ```sh
-python3 tools/make_dots.py 130 0.85 0.15 5   # columns, gamma, local contrast, highlight detail
+python3 tools/make_dots.py 130 0.7 0.1 3.5 0.62   # columns, gamma, local contrast, highlight detail, depth
 ```
 
 If you swap the photo, also update the face landmarks in `LM` in `js/main.js`.
