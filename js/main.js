@@ -1,4 +1,4 @@
-/* SanSan — rebuilt from light */
+/* SanSan — rebuilt from light, as light */
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const $ = (s) => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -31,102 +31,118 @@ const EDGES = (
 ).split(" ").map((e) => e.split("-"));
 
 /* ---------------- RECONSTRUCTION ---------------- */
+// Her photo lives here only as a brightness grid (js/dots.js), drawn as
+// halftone dots. The original image is never shown.
 const canvas = $("#recon");
 const ctx = canvas.getContext("2d");
-const img = $("#photo");
 const barEl = $("#bar");
+const GRID = window.SANSAN_DOTS;
+const LUM = Uint8Array.from(atob(GRID.data), (c) => c.charCodeAt(0));
+const BUCKETS = 7;
+const COLORS = Array.from({ length: BUCKETS }, (_, b) => {
+  const k = b / (BUCKETS - 1);
+  return `rgb(${ZIMA.map((z, i) => Math.round(z + (INDIGO[i] - z) * k))})`;
+});
 
-let W = 0, H = 0, DPR = 1, cell = 6;
-let photo, mosaic;            // offscreen canvases
-let dots = [];                // { x, y, sx, sy, r, b, delay }
-let buckets = 6;
-let hasPixels = true;
+let W = 0, H = 0, cell = 4;
+let dots = [];     // { x, y, sx, sy, r, b, delay }
 let t0 = 0, done = false;
-const pointer = { x: 0, y: 0, in: false };
-let glitchUntil = 0, nextGlitch = 0, glitchSlices = [];
+const pointer = { x: 0, y: 0, in: false, k: 0 };   // k eases the lens in/out
+let glitch = null, nextGlitch = 0, nextSweep = 0, sweepStart = -1;
 
-const T = { dots: 2000, meshIn: 1300, scanStart: 2200, scanDur: 2200, meshOut: 4700 };
-
-function offscreen(w, h) {
-  const c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  return c;
-}
+const T = { fly: 1100, meshIn: 1300, scanStart: 2100, scanDur: 2000, meshOut: 4300 };
+const SWEEP_MS = 1800;
 
 function build() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
   W = canvas.clientWidth;
   H = W * IMG_H / IMG_W;
-  canvas.width = Math.round(W * DPR);
-  canvas.height = Math.round(H * DPR);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // the photo, with a faint cool grade
-  photo = offscreen(canvas.width, canvas.height);
-  const p = photo.getContext("2d");
-  p.drawImage(img, 0, 0, photo.width, photo.height);
-  p.globalCompositeOperation = "soft-light";
-  p.fillStyle = "rgba(26,167,232,.18)";
-  p.fillRect(0, 0, photo.width, photo.height);
-
-  // blocky version for the scan band
-  cell = Math.max(5, Math.round(W / 92));
-  const cols = Math.floor(W / cell), rows = Math.floor(H / cell);
-  mosaic = offscreen(cols, rows);
-  mosaic.getContext("2d").drawImage(photo, 0, 0, cols, rows);
-
-  // sample brightness → halftone particles
+  cell = W / GRID.cols;
+  const cx = W * .5, cy = H * .4, maxD = Math.hypot(W, H) * .6;
   dots = [];
-  try {
-    const data = mosaic.getContext("2d").getImageData(0, 0, cols, rows).data;
-    let lo = 1, hi = 0;
-    const lum = new Float32Array(cols * rows);
-    for (let i = 0; i < lum.length; i++) {
-      const l = (0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]) / 255;
-      lum[i] = l; lo = Math.min(lo, l); hi = Math.max(hi, l);
-    }
-    const cx = W * .5, cy = H * .4, maxD = Math.hypot(W, H) * .6;
-    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-      const d = 1 - (lum[j * cols + i] - lo) / (hi - lo || 1);   // darkness 0..1
-      const x = (i + .5) * cell, y = (j + .5) * cell;
-      const a = rand(0, Math.PI * 2), far = rand(.5, 1.1) * maxD * 1.4;
-      dots.push({
-        x, y,
-        sx: cx + Math.cos(a) * far, sy: cy + Math.sin(a) * far,
-        r: cell * .5 * (0.14 + 0.86 * Math.pow(d, .85)),
-        b: Math.min(buckets - 1, Math.floor(d * buckets)),
-        delay: (Math.hypot(x - cx, y - cy) / maxD) * 700 + rand(0, 300),
-      });
-    }
-    hasPixels = true;
-  } catch {
-    // file:// pages can't read pixels; skip straight to the scan
-    hasPixels = false;
+  for (let j = 0; j < GRID.rows; j++) for (let i = 0; i < GRID.cols; i++) {
+    const d = 1 - LUM[j * GRID.cols + i] / 255;   // darkness 0..1
+    const x = (i + .5) * cell, y = (j + .5) * cell;
+    const a = rand(0, Math.PI * 2), far = rand(.7, 1.5) * maxD;
+    dots.push({
+      x, y,
+      sx: cx + Math.cos(a) * far, sy: cy + Math.sin(a) * far,
+      r: cell * .5 * (0.1 + 0.9 * Math.pow(d, .9)),
+      b: Math.min(BUCKETS - 1, Math.floor(d * BUCKETS)),
+      delay: (Math.hypot(x - cx, y - cy) / maxD) * 700 + rand(0, 300),
+    });
   }
 }
 
-const bucketColor = (b) => {
-  const k = b / (buckets - 1);
-  const c = ZIMA.map((z, i) => Math.round(z + (INDIGO[i] - z) * k));
-  return `rgb(${c})`;
-};
+function render(now) {
+  const t = now - t0;
+  ctx.clearRect(0, 0, W, H);
 
-function drawDots(progressAt, clipFn) {
-  for (let b = 0; b < buckets; b++) {
-    ctx.fillStyle = bucketColor(b);
+  // intro state
+  const scanK = done ? 1 : clamp01((t - T.scanStart) / T.scanDur);
+  const scanY = done ? Infinity : easeInOut(scanK) * (H + 20);
+
+  // idle effects
+  const sweepK = sweepStart < 0 ? -1 : (now - sweepStart) / SWEEP_MS;
+  const sweepY = sweepK >= 0 && sweepK <= 1 ? easeInOut(sweepK) * (H + 80) - 40 : -1e9;
+  const g = glitch && now < glitch.until ? glitch : null;
+  pointer.k += ((pointer.in ? 1 : 0) - pointer.k) * .15;
+  const R = W * .14, R2 = R * R;
+
+  for (let b = -1; b < BUCKETS; b++) {
+    // pass -1: dots still waiting below the scan line, drawn as a plain grid
+    ctx.fillStyle = b < 0 ? "rgba(26,167,232,.55)" : COLORS[b];
     ctx.beginPath();
     for (const d of dots) {
-      if (d.b !== b) continue;
-      const k = Math.min(1, progressAt(d));
-      if (k <= 0) continue;
-      const e = easeOut(k);
-      const x = d.sx + (d.x - d.sx) * e, y = d.sy + (d.y - d.sy) * e;
-      if (clipFn && !clipFn(x, y)) continue;
-      const r = d.r * (0.4 + 0.6 * e);
+      const locked = d.y < scanY;
+      if (b < 0 ? locked : (!locked || d.b !== b)) continue;
+
+      let x = d.x, y = d.y, r = locked ? d.r : d.r * .55 + cell * .06;
+      if (!done) {
+        const k = clamp01((t - d.delay) / T.fly);
+        if (k <= 0) continue;
+        const e = easeOut(k);
+        x = d.sx + (d.x - d.sx) * e;
+        y = d.sy + (d.y - d.sy) * e;
+        r *= 0.4 + 0.6 * e;
+      }
+      if (g && y > g.y0 && y < g.y1) x += g.dx;
+      const dy = y - sweepY;
+      if (dy > -40 && dy < 40) r *= 1 + .45 * (1 - Math.abs(dy) / 40);
+      if (pointer.k > .01) {
+        const px = x - pointer.x, py = y - pointer.y, q = px * px + py * py;
+        if (q < R2) {
+          const dist = Math.sqrt(q) || 1, f = (1 - dist / R) ** 2 * pointer.k;
+          x += (px / dist) * f * R * .22;
+          y += (py / dist) * f * R * .22;
+          r *= 1 + f * .6;
+        }
+      }
       ctx.moveTo(x + r, y);
       ctx.arc(x, y, r, 0, Math.PI * 2);
     }
     ctx.fill();
+  }
+
+  if (!done) {
+    // scan line
+    if (scanK > 0 && scanK < 1) {
+      const grad = ctx.createLinearGradient(0, scanY - 60, 0, scanY);
+      grad.addColorStop(0, "rgba(26,167,232,0)");
+      grad.addColorStop(1, "rgba(26,167,232,.16)");
+      ctx.fillStyle = grad; ctx.fillRect(0, scanY - 60, W, 60);
+      ctx.fillStyle = "#1aa7e8"; ctx.fillRect(0, scanY, W, 1);
+    }
+    drawMesh(Math.min(clamp01((t - T.meshIn) / 500), 1 - clamp01((t - T.meshOut) / 900)));
+    barEl.style.width = Math.round((clamp01(t / (T.fly + 1000)) * .35 + scanK * .65) * 100) + "%";
+    if (scanK >= 1 && t > T.meshOut + 900) finish(now);
+  } else if (sweepY > -1e8) {
+    ctx.fillStyle = "rgba(26,167,232,.5)";
+    ctx.fillRect(0, sweepY, W, 1);
   }
 }
 
@@ -134,7 +150,7 @@ function drawMesh(alpha) {
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = "rgba(26,167,232,.75)";
+  ctx.strokeStyle = "rgba(43,47,143,.6)";
   ctx.lineWidth = .7;
   ctx.beginPath();
   for (const [a, b] of EDGES) {
@@ -147,119 +163,35 @@ function drawMesh(alpha) {
   ctx.restore();
 }
 
-function drawPhotoRows(y0, y1) {
-  y0 = Math.max(0, y0); y1 = Math.min(H, y1);
-  if (y1 <= y0) return;
-  ctx.drawImage(photo, 0, y0 * DPR, photo.width, (y1 - y0) * DPR, 0, y0, W, y1 - y0);
-}
-
-function drawMosaicRows(y0, y1) {
-  y0 = Math.max(0, y0); y1 = Math.min(H, y1);
-  if (y1 <= y0) return;
-  ctx.save();
-  ctx.imageSmoothingEnabled = false;
-  ctx.beginPath(); ctx.rect(0, y0, W, y1 - y0); ctx.clip();
-  ctx.drawImage(mosaic, 0, 0, mosaic.width * cell, mosaic.height * cell);
-  ctx.restore();
-}
-
-function glitch(y0, y1, n, amp) {
-  for (let i = 0; i < n; i++) {
-    const y = rand(y0, y1), h = rand(2, 10), dx = rand(-amp, amp);
-    ctx.drawImage(photo, 0, y * DPR, photo.width, h * DPR, dx, y, W, h);
-    ctx.fillStyle = "rgba(26,167,232,.18)";
-    ctx.fillRect(0, y, W, h);
-  }
-}
-
-function setProgress(p) {
-  const v = Math.round(p * 100);
-  barEl.style.width = v + "%";
-}
-
-function frame(now) {
-  const t = now - t0;
-  ctx.clearRect(0, 0, W, H);
-
-  if (!done) {
-    const dotsK = hasPixels ? clamp01(t / T.dots) : 1;
-    const scanK = clamp01((t - (hasPixels ? T.scanStart : 300)) / T.scanDur);
-    const scanY = easeInOut(scanK) * (H + 40);
-
-    // revealed photo above the scan line, a blocky band at the line
-    drawPhotoRows(0, scanY - 40);
-    if (scanK > 0 && scanK < 1) {
-      drawMosaicRows(scanY - 40, scanY);
-      glitch(scanY - 50, scanY, 3, 14);
-    }
-    // particles still waiting below the line
-    if (hasPixels) drawDots((d) => (t - d.delay) / 1100, (x, y) => y > scanY - 4);
-
-    // scan line
-    if (scanK > 0 && scanK < 1) {
-      const g = ctx.createLinearGradient(0, scanY - 60, 0, scanY);
-      g.addColorStop(0, "rgba(26,167,232,0)");
-      g.addColorStop(1, "rgba(26,167,232,.22)");
-      ctx.fillStyle = g; ctx.fillRect(0, scanY - 60, W, 60);
-      ctx.fillStyle = "#1aa7e8"; ctx.fillRect(0, scanY, W, 1);
-    }
-
-    const meshA = hasPixels
-      ? Math.min(clamp01((t - T.meshIn) / 500), 1 - clamp01((t - T.meshOut) / 900))
-      : 1 - clamp01((t - 2600) / 900);
-    drawMesh(meshA);
-
-    const p = hasPixels ? dotsK * .35 + scanK * .65 : scanK;
-    setProgress(p);
-    if (scanK >= 1 && meshA <= 0) finish(now);
-  } else {
-    ctx.drawImage(photo, 0, 0, W, H);
-    // a rare, quiet glitch
-    if (now > nextGlitch) {
-      glitchUntil = now + 140;
-      nextGlitch = now + rand(4000, 8000);
-      const y = rand(H * .1, H * .9);
-      glitchSlices = Array.from({ length: 3 }, () => [y + rand(-30, 30), rand(2, 8), rand(-10, 10)]);
-    }
-    if (now < glitchUntil) {
-      for (const [y, h, dx] of glitchSlices) {
-        ctx.drawImage(photo, 0, y * DPR, photo.width, h * DPR, dx, y, W, h);
-        ctx.fillStyle = "rgba(26,167,232,.2)"; ctx.fillRect(0, y, W, h);
-      }
-    }
-    if (pointer.in) lens();
-  }
-  requestAnimationFrame(frame);
-}
-
-function lens() {
-  const R = W * .14, { x, y } = pointer;
-  ctx.save();
-  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.clip();
-  ctx.fillStyle = "#fff"; ctx.fillRect(x - R, y - R, R * 2, R * 2);
-  if (hasPixels) drawDots(() => 1, (dx, dy) => Math.abs(dx - x) < R + cell && Math.abs(dy - y) < R + cell);
-  else drawMosaicRows(y - R, y + R);
-  ctx.restore();
-  ctx.strokeStyle = "#1aa7e8"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x - R - 8, y); ctx.lineTo(x - R + 6, y);
-  ctx.moveTo(x + R - 6, y); ctx.lineTo(x + R + 8, y);
-  ctx.moveTo(x, y - R - 8); ctx.lineTo(x, y - R + 6);
-  ctx.moveTo(x, y + R - 6); ctx.lineTo(x, y + R + 8);
-  ctx.stroke();
-}
-
 function finish(now) {
   done = true;
-  setProgress(1);
-  nextGlitch = now + 2500;
+  barEl.style.width = "100%";
+  nextGlitch = now + rand(3000, 6000);
+  nextSweep = now + 2500;
+}
+
+// Redraw only while something is moving; a still portrait costs nothing.
+let lastDrawn = false;
+function frame(now) {
+  if (done) {
+    if (now > nextSweep && sweepStart < 0) sweepStart = now;
+    if (sweepStart >= 0 && now - sweepStart > SWEEP_MS) { sweepStart = -1; nextSweep = now + rand(6000, 9000); }
+    if (now > nextGlitch) {
+      const y0 = rand(H * .1, H * .85);
+      glitch = { y0, y1: y0 + rand(6, 22), dx: rand(-12, 12), until: now + 140 };
+      nextGlitch = now + rand(4000, 8000);
+    }
+  }
+  const moving = !done || sweepStart >= 0 || (glitch && now < glitch.until + 20) || pointer.in || pointer.k > .01;
+  if (moving || !lastDrawn) render(now);
+  lastDrawn = !moving;
+  requestAnimationFrame(frame);
 }
 
 function start() {
   build();
-  if (reduceMotion) { finish(performance.now()); }
   t0 = performance.now();
+  if (reduceMotion) finish(t0 + 1e9);
   requestAnimationFrame(frame);
 }
 
@@ -271,11 +203,10 @@ canvas.addEventListener("pointerleave", () => (pointer.in = false));
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (canvas.clientWidth !== W) build(); }, 150);
+  resizeTimer = setTimeout(() => { if (canvas.clientWidth !== W) { build(); lastDrawn = false; } }, 150);
 });
 
-if (img.complete && img.naturalWidth) start();
-else img.addEventListener("load", start, { once: true });
+start();
 
 /* ---------------- REVEAL ---------------- */
 const io = new IntersectionObserver((entries) => {
