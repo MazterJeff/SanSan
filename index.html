@@ -3,75 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SanSan — 再構成</title>
-  <meta name="description" content="SanSan, rebuilt from light." />
+  <title>SanSan</title>
   <meta name="theme-color" content="#fbfdff" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' fill='%231aa7e8'/%3E%3C/svg%3E" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&family=Noto+Sans+JP:wght@100;200;300;400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-
-  <header class="bar">
-    <a class="mark" href="#top"><i></i>SANSAN</a>
-    <span>再構成 / RECONSTRUCTION — 2026</span>
-  </header>
-
-  <main id="top">
-    <!-- 01 — the photo, rebuilt -->
+  <main>
     <section class="hero">
-      <figure class="frame" id="frame">
-        <span class="lbl tl">IMG_10797</span>
-        <span class="lbl tr">RECON <b id="pct">000</b>%</span>
-        <span class="lbl bl" id="count">— PARTICLES</span>
-        <span class="lbl br">1159 × 1283</span>
+      <figure class="frame">
         <i class="tick a"></i><i class="tick b"></i><i class="tick c"></i><i class="tick d"></i>
-        <canvas id="recon" role="img" aria-label="Photo of SanSan, reconstructed from particles of light"></canvas>
+        <canvas id="recon" role="img" aria-label="SanSan"></canvas>
         <img id="photo" src="img/sansan.jpg" alt="" hidden />
+        <div class="track" aria-hidden="true"><i id="bar"></i></div>
       </figure>
-
-      <div class="intro">
-        <p class="eyebrow">01 — 再構成</p>
-        <h1>SanSan</h1>
-        <p class="jp">光の粒から、もう一度きみを。</p>
-        <p class="en">Rebuilt from light, one grain at a time.</p>
-        <div class="status">
-          <span id="statusText">INITIALIZING</span>
-          <div class="track"><i id="bar"></i></div>
-        </div>
-        <p class="hint">写真に触れると、光の粒が見える<br /><span>hover or touch the photo to see her in light</span></p>
-      </div>
     </section>
 
-    <!-- 02 — letter -->
-    <section class="letter reveal">
-      <p class="eyebrow">02 — 手紙 / LETTER</p>
-      <p class="jp">一万枚の写真の中で、いつもこの一枚に戻ってしまう。光が全部をかき消しても、君の瞳だけは澄んでいる。君を好きになるって、きっとそういうこと。雑音が消えて、君だけが残る。</p>
-      <p class="en">Out of 10,797 photos, I keep coming back to this one. The light washes almost everything out — and yet your eyes stay perfectly clear. That's what loving you feels like: the noise fades, and it's just you.</p>
-    </section>
-
-    <!-- 03 — time -->
-    <section class="time reveal">
-      <p class="eyebrow">03 — 時間 / TIME</p>
-      <div class="days"><b id="days">∞</b><span>days together<br />一緒にいた日々</span></div>
-    </section>
-
-    <!-- 04 — zima -->
     <section class="end reveal">
-      <p class="eyebrow">04 — 最後に / LAST</p>
-      <button class="zima" id="zima" aria-label="大好き — I love you">
-        <span>大好き</span>
+      <button class="zima" id="zima" aria-label="♡">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <path d="M50 76C30 62 22 52 22 41a14 14 0 0 1 28-6 14 14 0 0 1 28 6c0 11-8 21-28 35z" />
+        </svg>
       </button>
-      <p class="end-en">I love you, SanSan. <span>ずっと。</span></p>
     </section>
   </main>
-
-  <footer>
-    <span>SANSAN — 光で描いたラブレター</span>
-    <span>made with love</span>
-  </footer>
 
   <script src="js/main.js"></script>
 </body>

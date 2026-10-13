@@ -1,9 +1,4 @@
 /* SanSan — rebuilt from light */
-const CONFIG = {
-  // The day it all started, e.g. "2023-05-20". Leave null to show ∞.
-  since: null,
-};
-
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const $ = (s) => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -34,13 +29,12 @@ const EDGES = (
   "mouthL-jL3 mouthR-jR3 mouthL-jL4 mouthR-jR4 lipD-jL4 lipD-jR4 nosL-jL2 nosR-jR2 " +
   "eyeLo-jL2 eyeRo-jR2 nosL-mouthL nosR-mouthR"
 ).split(" ").map((e) => e.split("-"));
-const TAGS = { eyeL: "01 瞳", eyeR: "02 瞳", tip: "03 鼻", lipU: "04 唇" };
 
 /* ---------------- RECONSTRUCTION ---------------- */
 const canvas = $("#recon");
 const ctx = canvas.getContext("2d");
 const img = $("#photo");
-const pctEl = $("#pct"), barEl = $("#bar"), statusEl = $("#statusText"), countEl = $("#count");
+const barEl = $("#bar");
 
 let W = 0, H = 0, DPR = 1, cell = 6;
 let photo, mosaic;            // offscreen canvases
@@ -109,7 +103,6 @@ function build() {
     // file:// pages can't read pixels; skip straight to the scan
     hasPixels = false;
   }
-  countEl.textContent = hasPixels ? `${dots.length.toLocaleString()} PARTICLES` : "— PARTICLES";
 }
 
 const bucketColor = (b) => {
@@ -151,9 +144,6 @@ function drawMesh(alpha) {
   ctx.stroke();
   ctx.fillStyle = "#2b2f8f";
   for (const k in LM) ctx.fillRect(LM[k][0] * W - 1.5, LM[k][1] * H - 1.5, 3, 3);
-  ctx.font = `${Math.max(9, W / 56)}px "IBM Plex Mono", monospace`;
-  ctx.fillStyle = "#2b2f8f";
-  for (const k in TAGS) ctx.fillText(TAGS[k], LM[k][0] * W + 6, LM[k][1] * H - 6);
   ctx.restore();
 }
 
@@ -184,7 +174,6 @@ function glitch(y0, y1, n, amp) {
 
 function setProgress(p) {
   const v = Math.round(p * 100);
-  pctEl.textContent = String(v).padStart(3, "0");
   barEl.style.width = v + "%";
 }
 
@@ -222,7 +211,6 @@ function frame(now) {
 
     const p = hasPixels ? dotsK * .35 + scanK * .65 : scanK;
     setProgress(p);
-    statusEl.textContent = scanK > 0 ? "RECONSTRUCTING — 再構成中" : "COLLECTING LIGHT — 光を集めています";
     if (scanK >= 1 && meshA <= 0) finish(now);
   } else {
     ctx.drawImage(photo, 0, 0, W, H);
@@ -260,16 +248,11 @@ function lens() {
   ctx.moveTo(x, y - R - 8); ctx.lineTo(x, y - R + 6);
   ctx.moveTo(x, y + R - 6); ctx.lineTo(x, y + R + 8);
   ctx.stroke();
-  ctx.font = `10px "IBM Plex Mono", monospace`;
-  ctx.fillStyle = "#2b2f8f";
-  ctx.fillText(`x ${(x / W).toFixed(3)}  y ${(y / H).toFixed(3)}`, x + R * .72 + 6, y + R * .72 + 12);
 }
 
 function finish(now) {
   done = true;
   setProgress(1);
-  statusEl.textContent = "RECONSTRUCTION COMPLETE — 再構成完了";
-  $(".hint").classList.add("show");
   nextGlitch = now + 2500;
 }
 
@@ -299,12 +282,6 @@ const io = new IntersectionObserver((entries) => {
   for (const en of entries) if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
 }, { threshold: .2 });
 document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
-
-/* ---------------- DAYS ---------------- */
-if (CONFIG.since) {
-  const start = new Date(CONFIG.since).getTime();
-  if (!Number.isNaN(start)) $("#days").textContent = Math.max(0, Math.floor((Date.now() - start) / 86400000)).toLocaleString();
-}
 
 /* ---------------- ZIMA ---------------- */
 const zima = $("#zima");
